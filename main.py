@@ -1,6 +1,7 @@
 import sys
 import os
 import importlib
+import traceback
 
 from PyQt6.QtWidgets import (
     QApplication,
@@ -14,10 +15,20 @@ from PyQt6.QtWidgets import (
 )
 
 from PyQt6.QtGui import QFont, QShortcut, QKeySequence
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer
 
 from speech import speak, get_voices
 from config.settings import settings
+
+
+def safe_run(func, message=None):
+    try:
+        func()
+        if message:
+            speak(message, settings["voice"])
+    except Exception:
+        traceback.print_exc()
+        speak("Experiment function not implemented or failed", settings["voice"])
 
 
 def load_experiments():
@@ -33,7 +44,9 @@ def load_experiments():
 
                 path = os.path.join(root, file)
 
-                module_path = path.replace("/", ".").replace(".py", "")
+                rel_path = os.path.relpath(path, base_path)
+                module_path = rel_path.replace(os.sep, ".").replace(".py", "")
+                module_path = "experiments." + module_path
 
                 module = importlib.import_module(module_path)
 
@@ -56,7 +69,7 @@ class MainWindow(QWidget):
         super().__init__()
 
         self.setWindowTitle("Accessible Experiment Platform")
-        self.resize(520,420)
+        self.resize(520, 420)
 
         layout = QVBoxLayout()
 
@@ -73,13 +86,12 @@ class MainWindow(QWidget):
 
         self.font_selector = QComboBox()
         self.font_selector.addItems(
-            ["Small","Medium","Large","Extra Large"]
+            ["Small", "Medium", "Large", "Extra Large"]
         )
 
         self.font_selector.currentTextChanged.connect(self.change_font)
 
         font_row.addWidget(self.font_selector)
-
         accessibility_layout.addLayout(font_row)
 
         voice_row = QHBoxLayout()
@@ -99,7 +111,6 @@ class MainWindow(QWidget):
         accessibility_layout.addLayout(voice_row)
 
         accessibility_box.setLayout(accessibility_layout)
-
         layout.addWidget(accessibility_box)
 
         experiment_box = QGroupBox("Experiments")
@@ -130,7 +141,6 @@ class MainWindow(QWidget):
         experiment_layout.addWidget(self.run_button)
 
         experiment_box.setLayout(experiment_layout)
-
         layout.addWidget(experiment_box)
 
         self.setLayout(layout)
@@ -148,8 +158,7 @@ class MainWindow(QWidget):
         self.setTabOrder(self.category_selector, self.exp_selector)
         self.setTabOrder(self.exp_selector, self.run_button)
 
-        # ensure tab starts correctly
-        self.font_selector.setFocus(Qt.FocusReason.TabFocusReason)
+        self.font_selector.setFocus()
 
     def apply_font(self):
 
@@ -160,10 +169,10 @@ class MainWindow(QWidget):
     def change_font(self, size):
 
         sizes = {
-            "Small":10,
-            "Medium":14,
-            "Large":18,
-            "Extra Large":24
+            "Small": 10,
+            "Medium": 14,
+            "Large": 18,
+            "Extra Large": 24
         }
 
         settings["font_size"] = sizes[size]
@@ -229,7 +238,7 @@ class ExperimentWindow(QWidget):
         self.reading_enabled = True
 
         self.setWindowTitle(experiment.name)
-        self.resize(520,420)
+        self.resize(520, 420)
 
         layout = QVBoxLayout()
 
@@ -248,17 +257,32 @@ class ExperimentWindow(QWidget):
         layout.addWidget(self.toggle_button)
 
         self.acquire_button = QPushButton("Acquire Data")
-        self.acquire_button.clicked.connect(self.acquire_data)
+        self.acquire_button.clicked.connect(
+            lambda: safe_run(
+                self.experiment.acquire_data,
+                "Data acquired"
+            )
+        )
 
         layout.addWidget(self.acquire_button)
 
         self.analyse_button = QPushButton("Analyse Data")
-        self.analyse_button.clicked.connect(self.analyse_data)
+        self.analyse_button.clicked.connect(
+            lambda: safe_run(
+                self.experiment.analyse,
+                "Analysis complete"
+            )
+        )
 
         layout.addWidget(self.analyse_button)
 
         self.plot_button = QPushButton("Plot Graph")
-        self.plot_button.clicked.connect(self.plot_graph)
+        self.plot_button.clicked.connect(
+            lambda: safe_run(
+                self.experiment.plot,
+                "Graph generated"
+            )
+        )
 
         layout.addWidget(self.plot_button)
 
@@ -268,22 +292,6 @@ class ExperimentWindow(QWidget):
 
         if self.reading_enabled:
             self.read_experiment()
-
-        QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(
-            self.read_experiment
-        )
-
-        QShortcut(QKeySequence("Ctrl+A"), self).activated.connect(
-            self.acquire_data
-        )
-
-        QShortcut(QKeySequence("Ctrl+N"), self).activated.connect(
-            self.analyse_data
-        )
-
-        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(
-            self.plot_graph
-        )
 
     def apply_font(self):
 
@@ -316,27 +324,6 @@ class ExperimentWindow(QWidget):
                 settings["voice"]
             )
         )
-
-    def acquire_data(self):
-
-        self.experiment.acquire_data()
-
-        if self.reading_enabled:
-            speak("Data acquired", settings["voice"])
-
-    def analyse_data(self):
-
-        self.experiment.analyse()
-
-        if self.reading_enabled:
-            speak("Analysis complete", settings["voice"])
-
-    def plot_graph(self):
-
-        self.experiment.plot()
-
-        if self.reading_enabled:
-            speak("Graph generated", settings["voice"])
 
 
 app = QApplication(sys.argv)
