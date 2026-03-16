@@ -1,253 +1,475 @@
-# Accessible Experiment Platform
-
-## Overview
-
-The Accessible Experiment Platform is a cross-platform laboratory interface designed to make physics experiments accessible to visually impaired and mobility-impaired students.
-
-The system provides:
-
-* Keyboard-driven navigation
-* Text-to-speech narration
-* Adjustable font sizes
-* Voice selection
-* Modular experiment architecture
-* Support for Arduino-based sensors
-* CSV data experiments
-* Graphing and analysis
+import sys
+import os
+import importlib
+import traceback
 
-The software runs on:
+from PyQt6.QtWidgets import (
+    QApplication,
+    QWidget,
+    QPushButton,
+    QVBoxLayout,
+    QComboBox,
+    QLabel,
+    QGroupBox,
+    QHBoxLayout
+)
 
-* macOS
-* Linux
-* Windows
+from PyQt6.QtGui import (
+    QFont,
+    QShortcut,
+    QKeySequence,
+    QFontDatabase,
+    QDesktopServices
+)
 
-and is written entirely in Python.
+from PyQt6.QtCore import QTimer, QUrl
 
----
+from speech import speak, get_voices
+from config.settings import settings
 
-# System Architecture
 
-The program has three main layers.
+loaded_fonts = []
+font_lookup = {}
 
-| Layer              | Purpose                          |
-| ------------------ | -------------------------------- |
-| GUI                | User interface and accessibility |
-| Experiment Modules | Individual experiments           |
-| Hardware Interface | Arduino sensor communication     |
 
-The application dynamically loads experiments placed in the `experiments` directory.
+def load_fonts():
 
----
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    font_dir = os.path.join(script_dir, "fonts")
 
-# Folder Structure
+    if not os.path.exists(font_dir):
+        return
 
-```
-accessible-experiment-platform
-│
-├── accessibility
-│   └── speech_manager.py
-│
-├── config
-│   └── settings.py
-│
-├── data
-│   └── csv_loader.py
-│
-├── experiment
-│   ├── base_experiment.py
-│   └── example_experiment.py
-│
-├── experiments
-│   ├── mechanics
-│   │   ├── simple_pendulum.py
-│   │   └── torsion_pendulum.py
-│   │
-│   └── heat
-│       └── lees_disc.py
-│
-├── gui
-│   └── main_window.py
-│
-├── hardware
-│   ├── arduino_interface.py
-│   └── serial_detection.py
-│
-├── web
-│   ├── server.py
-│   └── templates
-│       └── index.html
-│
-├── main.py
-├── speech.py
-├── run.sh
-├── install.sh
-└── requirements.txt
-```
+    for file in os.listdir(font_dir):
 
----
+        if file.lower().endswith(".ttf") or file.lower().endswith(".otf"):
 
-# Installation
+            path = os.path.join(font_dir, file)
 
-## 1 Install Python
+            font_id = QFontDatabase.addApplicationFont(path)
 
-Python 3.10 or newer is recommended.
+            if font_id == -1:
+                continue
 
-Download from:
+            families = QFontDatabase.applicationFontFamilies(font_id)
 
-https://www.python.org
+            for fam in families:
 
----
+                styles = QFontDatabase.styles(fam)
 
-## 2 Install dependencies
+                for style in styles:
 
-From inside the project folder run:
+                    label = f"{fam} {style}"
 
-```
-bash install.sh
-```
+                    if label not in font_lookup:
+                        loaded_fonts.append(label)
+                        font_lookup[label] = (fam, style)
 
-or manually:
+    loaded_fonts.sort()
 
-```
-pip install -r requirements.txt
-```
 
----
+def apply_global_font():
 
-# Running the Program
+    if settings["font_family"] == "Default":
 
-From inside the project folder:
+        font = QFont()
+        font.setPointSize(settings["font_size"])
 
-```
-./run.sh
-```
+    else:
 
-or
+        font = QFontDatabase.font(
+            settings["font_family"],
+            settings["font_style"],
+            settings["font_size"]
+        )
 
-```
-python main.py
-```
+    QApplication.instance().setFont(font)
 
----
 
-# Accessibility Features
+def safe_run(func):
 
-The platform supports several accessibility tools.
+    try:
+        func()
 
-| Feature              | Description                              |
-| -------------------- | ---------------------------------------- |
-| Keyboard navigation  | Full interface usable without mouse      |
-| Screen narration     | Text-to-speech reading of instructions   |
-| Adjustable fonts     | Supports low vision users                |
-| Voice selection      | Multiple speech voices                   |
-| Experiment narration | Aim, apparatus, and procedure read aloud |
+    except Exception:
 
----
+        traceback.print_exc()
 
-# Keyboard Shortcuts
 
-| Shortcut       | Function                     |
-| -------------- | ---------------------------- |
-| Ctrl / Cmd + O | Open experiment              |
-| Ctrl / Cmd + R | Read experiment instructions |
-| Ctrl / Cmd + A | Acquire data                 |
-| Ctrl / Cmd + N | Analyse data                 |
-| Ctrl / Cmd + P | Plot graph                   |
+def load_experiments():
 
----
+    base_path = "experiments"
+    categories = {}
 
-# Adding New Experiments
+    for root, dirs, files in os.walk(base_path):
 
-Experiments are simple Python modules.
+        for file in files:
 
-Create a new file inside:
+            if file.endswith(".py"):
 
-```
-experiments/<category>/
-```
+                path = os.path.join(root, file)
+                rel_path = os.path.relpath(path, base_path)
 
-Example:
+                module_path = rel_path.replace(os.sep, ".").replace(".py", "")
+                module_path = "experiments." + module_path
 
-```
-experiments/mechanics/new_experiment.py
-```
+                module = importlib.import_module(module_path)
 
-Example template:
+                exp = module.Experiment()
+                cat = exp.category
 
-```python
-from experiment.base_experiment import BaseExperiment
+                if cat not in categories:
+                    categories[cat] = []
 
-class Experiment(BaseExperiment):
+                categories[cat].append(exp)
 
-    name = "Example Experiment"
-    category = "Mechanics"
+    return categories
 
-    aim = "Demonstrate experimental structure."
 
-    apparatus = [
-        "Arduino sensor",
-        "Support stand",
-        "Timer"
-    ]
+class MainWindow(QWidget):
 
-    procedure = [
-        "Connect the sensor",
-        "Start the program",
-        "Record measurements"
-    ]
+    def __init__(self):
 
-    def acquire_data(self):
-        pass
+        super().__init__()
 
-    def analyse(self):
-        pass
+        self.setWindowTitle("Accessible Experiment Platform")
+        self.resize(520, 420)
 
-    def plot(self):
-        pass
-```
+        layout = QVBoxLayout()
 
-The program will automatically detect new experiments.
+        title = QLabel("Accessible Experiment Platform")
+        layout.addWidget(title)
 
----
+        accessibility_box = QGroupBox("Accessibility Settings")
+        accessibility_layout = QVBoxLayout()
 
-# Hardware Experiments
+        font_row = QHBoxLayout()
 
-Arduino communication is handled by:
+        font_label = QLabel("Font Size")
+        font_row.addWidget(font_label)
 
-```
-hardware/arduino_interface.py
-```
+        self.font_selector = QComboBox()
+        self.font_selector.addItems(
+            ["Small", "Medium", "Large", "Extra Large"]
+        )
 
-Sensors can be read through serial communication.
+        self.font_selector.currentTextChanged.connect(
+            self.change_font_size
+        )
 
----
+        font_row.addWidget(self.font_selector)
+        accessibility_layout.addLayout(font_row)
 
-# Data Experiments
+        font_family_row = QHBoxLayout()
 
-Experiments using recorded datasets can use:
+        font_family_label = QLabel("Font Type")
+        font_family_row.addWidget(font_family_label)
 
-```
-data/csv_loader.py
-```
+        self.font_family_selector = QComboBox()
+        self.font_family_selector.addItem("Default")
 
-This allows analysis without hardware.
+        for f in loaded_fonts:
+            self.font_family_selector.addItem(f)
 
----
+        self.font_family_selector.currentTextChanged.connect(
+            self.change_font_family
+        )
 
-# Contributing
+        font_family_row.addWidget(self.font_family_selector)
+        accessibility_layout.addLayout(font_family_row)
 
-Students can contribute by:
+        voice_row = QHBoxLayout()
 
-* Adding new experiments
-* Improving accessibility
-* Improving hardware integration
-* Adding graphing modules
-* Improving documentation
+        voice_label = QLabel("Voice")
+        voice_row.addWidget(voice_label)
 
----
+        self.voice_selector = QComboBox()
 
-# License
+        self.voices = sorted(set(get_voices()))
+        self.voice_selector.addItems(self.voices)
 
-This project is intended for educational use in accessible laboratory environments.
+        self.voice_selector.currentIndexChanged.connect(
+            self.change_voice
+        )
 
----
+        voice_row.addWidget(self.voice_selector)
+        accessibility_layout.addLayout(voice_row)
+
+        accessibility_box.setLayout(accessibility_layout)
+        layout.addWidget(accessibility_box)
+
+        experiment_box = QGroupBox("Experiments")
+        experiment_layout = QVBoxLayout()
+
+        self.categories = load_experiments()
+
+        self.category_selector = QComboBox()
+        self.category_selector.addItems(self.categories.keys())
+
+        self.category_selector.currentIndexChanged.connect(
+            self.category_changed
+        )
+
+        experiment_layout.addWidget(self.category_selector)
+
+        self.exp_selector = QComboBox()
+        self.exp_selector.currentIndexChanged.connect(
+            self.experiment_changed
+        )
+
+        experiment_layout.addWidget(self.exp_selector)
+
+        self.update_experiments()
+
+        self.run_button = QPushButton("Open Experiment")
+        self.run_button.clicked.connect(self.run_experiment)
+
+        experiment_layout.addWidget(self.run_button)
+
+        experiment_box.setLayout(experiment_layout)
+        layout.addWidget(experiment_box)
+
+        self.setLayout(layout)
+
+        QShortcut(
+            QKeySequence("Ctrl+O"),
+            self
+        ).activated.connect(self.run_experiment)
+
+        apply_global_font()
+
+        speak("Accessible Experiment Platform", settings["voice"])
+
+        self.font_selector.setFocus()
+
+    def change_font_size(self, size):
+
+        sizes = {
+            "Small": 10,
+            "Medium": 14,
+            "Large": 18,
+            "Extra Large": 24
+        }
+
+        settings["font_size"] = sizes[size]
+
+        apply_global_font()
+
+        speak(
+            f"Font size set to {size}",
+            settings["voice"]
+        )
+
+    def change_font_family(self, label):
+
+        if label == "Default":
+
+            settings["font_family"] = "Default"
+            settings["font_style"] = ""
+
+        else:
+
+            family, style = font_lookup[label]
+
+            settings["font_family"] = family
+            settings["font_style"] = style
+
+        apply_global_font()
+
+        speak(
+            f"Font style set to {label}",
+            settings["voice"]
+        )
+
+    def change_voice(self, index):
+
+        if index < len(self.voices):
+            settings["voice"] = self.voices[index]
+
+        speak(
+            f"Voice set to {settings['voice']}",
+            settings["voice"]
+        )
+
+    def category_changed(self):
+
+        category = self.category_selector.currentText()
+
+        self.update_experiments()
+
+        speak(
+            f"{category} category selected",
+            settings["voice"]
+        )
+
+    def experiment_changed(self):
+
+        name = self.exp_selector.currentText()
+
+        if name:
+            speak(
+                f"{name} selected",
+                settings["voice"]
+            )
+
+    def update_experiments(self):
+
+        category = self.category_selector.currentText()
+
+        self.exp_selector.blockSignals(True)
+        self.exp_selector.clear()
+
+        for exp in self.categories[category]:
+            self.exp_selector.addItem(exp.name)
+
+        self.exp_selector.blockSignals(False)
+
+    def run_experiment(self):
+
+        category = self.category_selector.currentText()
+        index = self.exp_selector.currentIndex()
+
+        experiment = self.categories[category][index]
+
+        speak(
+            f"Opening {experiment.name}",
+            settings["voice"]
+        )
+
+        self.exp_window = ExperimentWindow(experiment)
+        self.exp_window.show()
+
+
+class ExperimentWindow(QWidget):
+
+    def __init__(self, experiment):
+
+        super().__init__()
+
+        self.experiment = experiment
+        self.reading_enabled = True
+
+        self.setWindowTitle(experiment.name)
+        self.resize(520, 420)
+
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel(experiment.name))
+        layout.addWidget(QLabel("Aim: " + experiment.aim))
+        layout.addWidget(
+            QLabel("Apparatus: " + ", ".join(experiment.apparatus))
+        )
+        layout.addWidget(
+            QLabel("Procedure: " + ", ".join(experiment.procedure))
+        )
+
+        self.instructions_button = QPushButton("Full Instructions")
+        self.instructions_button.clicked.connect(self.open_instructions)
+        layout.addWidget(self.instructions_button)
+
+        self.toggle_button = QPushButton("Toggle Screen Reading")
+        self.toggle_button.clicked.connect(self.toggle_reading)
+        layout.addWidget(self.toggle_button)
+
+        self.acquire_button = QPushButton("Acquire Data")
+        self.acquire_button.clicked.connect(
+            lambda: self.run_with_feedback(
+                self.experiment.acquire_data,
+                "Data acquired"
+            )
+        )
+        layout.addWidget(self.acquire_button)
+
+        self.analyse_button = QPushButton("Analyse Data")
+        self.analyse_button.clicked.connect(
+            lambda: self.run_with_feedback(
+                self.experiment.analyse,
+                "Analysis complete"
+            )
+        )
+        layout.addWidget(self.analyse_button)
+
+        self.plot_button = QPushButton("Plot Graph")
+        self.plot_button.clicked.connect(
+            lambda: self.run_with_feedback(
+                self.experiment.plot,
+                "Graph generated"
+            )
+        )
+        layout.addWidget(self.plot_button)
+
+        self.setLayout(layout)
+
+        if self.reading_enabled:
+            self.read_experiment()
+
+    def speak_if_enabled(self, text):
+
+        if self.reading_enabled:
+            speak(text, settings["voice"])
+
+    def run_with_feedback(self, func, message):
+
+        try:
+            func()
+            self.speak_if_enabled(message)
+
+        except Exception:
+
+            traceback.print_exc()
+
+            self.speak_if_enabled(
+                "Experiment function not implemented or failed"
+            )
+
+    def open_instructions(self):
+
+        if not hasattr(self.experiment, "instructions_file"):
+            self.speak_if_enabled("Instructions file not available")
+            return
+
+        path = os.path.abspath(self.experiment.instructions_file)
+
+        if os.path.exists(path):
+
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            self.speak_if_enabled("Opening full instructions")
+
+        else:
+
+            self.speak_if_enabled("Instructions file not found")
+
+    def toggle_reading(self):
+
+        self.reading_enabled = not self.reading_enabled
+
+        if self.reading_enabled:
+            speak("Screen reading enabled", settings["voice"])
+        else:
+            speak("Screen reading disabled", settings["voice"])
+
+    def read_experiment(self):
+
+        if not self.reading_enabled:
+            return
+
+        speak(self.experiment.name, settings["voice"])
+
+        QTimer.singleShot(
+            2500,
+            lambda: self.speak_if_enabled(
+                f"Aim. {self.experiment.aim}. "
+                f"Apparatus. {', '.join(self.experiment.apparatus)}. "
+                f"Procedure. {', '.join(self.experiment.procedure)}."
+            )
+        )
+
+
+app = QApplication(sys.argv)
+
+load_fonts()
+
+window = MainWindow()
+window.show()
+
+sys.exit(app.exec())
